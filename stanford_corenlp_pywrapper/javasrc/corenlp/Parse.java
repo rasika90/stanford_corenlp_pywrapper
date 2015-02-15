@@ -382,7 +382,7 @@ public class Parse {
 
 		List<List> outCorefs = Lists.newArrayList();
 		switch (mode) {
-		case FULLPARSE:
+		case DCOREF:
 			addDCoref(outCorefs, corefChains);
 			break;
 		}
@@ -391,7 +391,7 @@ public class Parse {
 				//	        	.put("text", doctext)
 		outDoc.put("sentences", outSentences)
 		switch (mode) {
-			case FULLPARSE:
+			case DCOREF:
 				outDoc.put("dcoref", outCorefs)
 				break;
 		}
