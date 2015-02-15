@@ -78,7 +78,8 @@ public class Parse {
 		POS,
 		NER,
 		PARSE,
-		NERPARSE;
+		NERPARSE,
+		DCOREF;
 	}
 
 	static enum InputFormat {
@@ -97,6 +98,7 @@ public class Parse {
 				"  ner:        POS and NER (and lemmas)\n" +
 				"  parse:  fairly basic parsing with POS, lemmas, trees, dependencies\n" +
 				"  nerparse:  parsing with NER, POS, lemmas, depenencies.\n" +
+				"  dcoref:  parsing DCOERF, NER, POS, lemmas, dependecies. \n"
 				"              This is the maximum processing short of coreference.\n" +
 				"\n" +
 				"Input format can be either\n" +
@@ -120,6 +122,7 @@ public class Parse {
 			_mode.equals("ner") ? ProcessingMode.NER :
 			_mode.equals("parse") ? ProcessingMode.PARSE :
 			_mode.equals("nerparse") ? ProcessingMode.NERPARSE :
+			_mode.equals("nerparse") ? ProcessingMode.DCOREF :
 			null;
 	}
 
@@ -138,7 +141,10 @@ public class Parse {
 		}
 		else if (mode==ProcessingMode.NERPARSE) {
 			props.put("annotators", "tokenize, ssplit, pos, lemma, ner, parse");
-		} 
+		}
+		else if (mode==ProcessingMode.DCOREF) {
+			props.put("annotators", "tokenize, ssplit, pos, lemma, ner, parse, dcoref");
+		}
 		else {
 			assert false : "bad mode";
 		}
@@ -178,6 +184,47 @@ public class Parse {
 		List deps = jsonFriendlyDeps(dependencies);
 		sent_info.put("deps_basic", deps);
 	}
+	@SuppressWarnings("rawtypes")
+	static void addDCoref(List dcoref, Map<Integer, CorefChain> corefChains) {
+		for (CorefChain chain : corefChains.values()) {
+			CorefChain.CorefMention representative =
+					chain.getRepresentativeMention();
+			for (CorefChain.CorefMention mention : chain.getMentionsInTextualOrder()) {
+				if (mention == representative) {
+					continue;
+				}
+				// all offsets start at 1!
+				//                System.out.println("\t(" + mention.sentNum + ","
+				//                        + mention.headIndex + ",["
+				//                        + mention.startIndex + ","
+				//                        + mention.endIndex + "]) -> ("
+				//                        + representative.sentNum + ","
+				//                        + representative.headIndex + ",["
+				//                        + representative.startIndex + ","
+				//                        + representative.endIndex + "]), that is: \""
+				//                        + mention.mentionSpan + "\" -> \""
+				//                        + representative.mentionSpan + "\"");
+				Map<String, Object> coref = Maps.newHashMap();
+				Map<String, Object> corefType =  Maps.newHashMap();
+				coref.put("sentence",mention.sentNum);
+				coref.put("start",mention.startIndex);
+				coref.put("end",mention.endIndex);
+				coref.put("head",mention.headIndex);
+				coref.put("text",mention.mentionSpan);
+				corefType.put("mention",coref);
+
+				coref = Maps.newHashMap();
+				coref.put("sentence",representative.sentNum);
+				coref.put("start",representative.startIndex);
+				coref.put("end",representative.endIndex);
+				coref.put("head",representative.headIndex);
+				coref.put("text",representative.mentionSpan);
+				corefType.put("represent",coref);
+
+				dcoref.add(corefType);
+			}
+		}
+	}
 	@SuppressWarnings({ "rawtypes", "unchecked" })
 	static List jsonFriendlyDeps(SemanticGraph dependencies) {
 		List deps = new ArrayList();
@@ -212,6 +259,9 @@ public class Parse {
 	}
 	
 	public void setAnnotatorsFromMode() {
+		Properties props = new Properties();
+		props.setProperty("ner.model", "edu/stanford/nlp/models/ner/english.all.3class.caseless.distsim.crf.ser.gz");
+
 		setAnnotators(props, mode);
 		//	    props.setProperty("tokenize.whitespace", "true");
 		//	    props.setProperty("ssplit.eolonly", "true");
@@ -271,6 +321,8 @@ public class Parse {
 			return new String[]{ "pos", "lemmas", "ner", "normner" };
 		case NERPARSE:
 			return new String[]{ "pos", "lemmas", "parse", "deps_basic", "deps_cc", "ner", "normner" };
+		case DCOREF:
+			return new String[]{ "pos", "lemmas", "ner", "parse", "dcoref"};
 		default:
 			return new String[] {};
 		}
@@ -314,10 +366,12 @@ public class Parse {
 		pipeline.annotate(document);
 
 		List<CoreMap> sentences = document.get(SentencesAnnotation.class);
+		//to get dcoref
+		Map<Integer, CorefChain> corefChains = document.get(CorefCoreAnnotations.CorefChainAnnotation.class);
 		List<Map> outSentences = Lists.newArrayList();
 
-		for(CoreMap sentence: sentences) {
-			Map<String,Object> sent_info = Maps.newHashMap();
+		for (CoreMap sentence : sentences) {
+			Map<String, Object> sent_info = Maps.newHashMap();
 			addTokenBasics(sent_info, sentence);
 			numTokens += ((List) sent_info.get("tokens")).size();
 			for (String outputType : outputTypes()) {
@@ -326,11 +380,23 @@ public class Parse {
 			outSentences.add(sent_info);
 		}
 
+		List<List> outCorefs = Lists.newArrayList();
+		switch (mode) {
+		case FULLPARSE:
+			addDCoref(outCorefs, corefChains);
+			break;
+		}
+
 		Map outDoc = new ImmutableMap.Builder()
-		//	        	.put("text", doctext)
-			.put("sentences", outSentences)
+				//	        	.put("text", doctext)
+		outDoc.put("sentences", outSentences)
+		switch (mode) {
+			case FULLPARSE:
+				outDoc.put("dcoref", outCorefs)
+				break;
+		}
 			// coref entities would go here too
-			.build();
+		outDoc.build();
 		return JsonUtil.toJson(outDoc);
 	}
 
